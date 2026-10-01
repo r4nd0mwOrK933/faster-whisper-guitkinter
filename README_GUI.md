@@ -27,8 +27,18 @@ py -3.14 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install .
+# 调试启动：保留终端，便于查看错误输出
 python whisper_tkgui.py
 ```
+
+日常使用源码启动时，可以使用 `pythonw.exe` 隐藏控制台窗口：
+
+```powershell
+pythonw.exe whisper_tkgui.py
+```
+
+打包后的 Windows GUI 应用也采用无控制台模式，直接运行
+`dist\whisper_tkgui\whisper_tkgui.exe` 即可。
 
 The first run generates `gui_config.ini` from gui_config.example.ini. Fill in the local paths for the Whisper model and audio file. Do not commit personal paths or credentials.
 
