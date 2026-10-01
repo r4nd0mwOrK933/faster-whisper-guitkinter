@@ -1,0 +1,126 @@
+"""
+SRT 字幕文件工具 — 将 VAD 检测到的时间戳列表转换为 .srt 格式字幕。
+"""
+
+import os
+import re
+
+
+def seconds_to_srt_time(seconds: float) -> str:
+    """将秒数 (float) 转换为 SRT 时间戳格式: HH:MM:SS,mmm"""
+    if seconds < 0:
+        seconds = 0.0
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    millis = int(round((seconds % 1) * 1000))
+    # 处理 1000ms 进位
+    if millis >= 1000:
+        millis -= 1000
+        secs += 1
+        if secs >= 60:
+            secs -= 60
+            minutes += 1
+            if minutes >= 60:
+                minutes -= 60
+                hours += 1
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+
+def srt_time_to_seconds(srt_time: str) -> float:
+    """将 SRT 时间戳格式 (HH:MM:SS,mmm) 转换为秒数 (float)。"""
+    match = re.match(r"(\d+):(\d+):(\d+)[,.](\d+)", srt_time)
+    if not match:
+        raise ValueError(f"无法解析 SRT 时间戳: {srt_time}")
+    hours, minutes, secs, millis = match.groups()
+    return int(hours) * 3600 + int(minutes) * 60 + int(secs) + int(millis) / 1000.0
+
+
+def parse_srt_file(path: str) -> list[tuple[float, float, str]]:
+    """解析 .srt 字幕文件，返回 [(start_s, end_s, text), ...] 列表。
+
+    Args:
+        path: .srt 文件路径。
+
+    Returns:
+        每个字幕条目为 (开始秒, 结束秒, 文本内容) 的元组列表。
+    """
+    segments: list[tuple[float, float, str]] = []
+    # SRT 格式: 序号行\n时间戳行\n文本行\n空行
+    time_pattern = re.compile(
+        r"(\d+:\d+:\d+[,.]\d+)\s*-->\s*(\d+:\d+:\d+[,.]\d+)"
+    )
+
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    blocks = content.strip().split("\n\n")
+    for block in blocks:
+        lines = block.strip().splitlines()
+        if len(lines) < 2:
+            continue
+        # 跳过序号行，查找时间戳行
+        time_match = None
+        time_idx = -1
+        for i, line in enumerate(lines):
+            time_match = time_pattern.match(line.strip())
+            if time_match:
+                time_idx = i
+                break
+        if time_match is None:
+            continue
+        start = srt_time_to_seconds(time_match.group(1))
+        end = srt_time_to_seconds(time_match.group(2))
+        # 时间戳之后的所有行合并为文本
+        text_lines = lines[time_idx + 1:]
+        text = "\n".join(text_lines).strip()
+        segments.append((start, end, text))
+
+    return segments
+
+
+def write_srt_file(
+    path: str,
+    timestamps: list[tuple[float, float]],
+    texts: list[str] | None = None,
+    wav_dur: float | None = None,
+) -> None:
+    """将时间戳列表写入 .srt 字幕文件。
+
+    Args:
+        path: 输出 .srt 文件绝对路径。
+        timestamps: [(start_s, end_s), ...] 语音段列表，单位秒。
+        texts: 与 timestamps 对应的字幕文本列表，为 None 时生成空白字幕。
+        wav_dur: 音频总时长 (秒)，用于将末尾超出范围的结束时间裁剪到音频末尾。
+    """
+    out_dir = os.path.dirname(path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    if texts is not None and len(texts) != len(timestamps):
+        raise ValueError(
+            f"texts 数量 ({len(texts)}) 与 timestamps 数量 ({len(timestamps)}) 不匹配"
+        )
+
+    lines: list[str] = []
+    for idx, (start, end) in enumerate(timestamps, start=1):
+        if wav_dur is not None:
+            end = min(end, wav_dur)
+        if start >= end:
+            continue
+
+        start_str = seconds_to_srt_time(start)
+        end_str = seconds_to_srt_time(end)
+        lines.append(str(idx))
+        lines.append(f"{start_str} --> {end_str}")
+        lines.append(texts[idx - 1] if texts is not None else "")
+        lines.append("")   # 段尾空行
+
+    if not lines and timestamps:
+        raise RuntimeError(
+            f"write_srt_file: 所有 {len(timestamps)} 个时间戳均被过滤 (start >= end 或无效)，"
+            f"未生成任何 SRT 内容"
+        )
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))

@@ -1,0 +1,19 @@
+[project]
+name = "faster-whisper-gui"
+version = "0.1.0"
+description = "A Windows GUI for local faster-whisper subtitle transcription"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "numpy",
+    "onnxruntime-directml",
+    "ctranslate2",
+    "tokenizers",
+    "av",
+    "tkinterdnd2",
+    "tqdm",
+    "huggingface_hub"
+]
+
+[project.optional-dependencies]
+build = ["pyinstaller"]

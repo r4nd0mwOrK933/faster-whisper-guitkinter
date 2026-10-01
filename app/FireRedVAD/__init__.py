@@ -1,0 +1,1 @@
+from .main import vad_detect_simple

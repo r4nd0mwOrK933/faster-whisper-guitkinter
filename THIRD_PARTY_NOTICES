@@ -1,0 +1,50 @@
+Third-party notices
+====================
+
+This repository is a derivative application. The notices below identify the
+main third-party code and model resources included in the source tree.
+
+1. faster-whisper
+
+Source: https://github.com/SYSTRAN/faster-whisper
+License: MIT
+Copyright: 2023 SYSTRAN
+
+The original MIT license text is provided in LICENSE.
+
+2. FireRedVAD
+
+Source code: https://github.com/FireRedTeam/FireRedVAD
+Model repository: https://huggingface.co/FireRedTeam/FireRedVAD
+License shown by the upstream project and model card: Apache-2.0
+Paper: https://arxiv.org/abs/2603.10420
+
+Included resources:
+- app/FireRedVAD/fireredvad_vad.onnx
+  SHA-256: A226E68E695548754A9AB5480A55BBCB8522AA69111CB97E4F093DDCE63AD5DC
+- app/FireRedVAD/cmvn.ark
+  SHA-256: C87F6F13EDF0F0EC7535DDFC9CC3387D9268CB234B70182D566C5E2EDF3CA473
+
+The FireRedVAD source repository's Apache-2.0 license must be included with
+any redistribution of the covered work. Verify the upstream model revision
+and license before each public release.
+
+3. Silero VAD model
+
+Resource: faster_whisper/assets/silero_vad_v6.onnx
+Project: https://github.com/snakers4/silero-vad
+SHA-256: 914FD98AC0A73D69BA1E70C9B1D66ACB740EFF90500DFDE08B89A961B168A6A9
+
+Check the upstream Silero VAD repository and model terms for the exact release
+being redistributed.
+
+4. Runtime dependencies
+
+This project uses NumPy, CTranslate2, Hugging Face Hub, Tokenizers, PyAV,
+ONNX Runtime, TkinterDnD2, Pillow, tqdm, and PyInstaller. Their licenses and
+notices apply to the installed or bundled versions. Consult each package's
+metadata and the generated PyInstaller distribution before redistributing a
+binary package.
+
+FFmpeg is an external prerequisite in this project. It is not included in the
+source tree or generated application by this repository.
