@@ -13,7 +13,7 @@ jobs:
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
-      
+
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -64,5 +64,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: whisper_tkgui-windows
-          path: whisper_tkgui-windows.zip
+          path: dist/whisper_tkgui
           retention-days: 1
