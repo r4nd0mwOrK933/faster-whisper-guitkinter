@@ -327,9 +327,9 @@ class App:
         self._load_config_to_ui()
         self._poll_log()
 
-    def _translate(self, language: str, key: str, **kwargs) -> str:
-        language = language if language in LANGUAGE_CODES else "zh"
-        text = TRANSLATIONS[language][key]
+    def _translate(self, gui_language: str, key: str, **kwargs) -> str:
+        gui_language = gui_language if gui_language in LANGUAGE_CODES else "zh"
+        text = TRANSLATIONS[gui_language][key]
         return text.format(**kwargs) if kwargs else text
 
     def _tr(self, key: str, **kwargs) -> str:
