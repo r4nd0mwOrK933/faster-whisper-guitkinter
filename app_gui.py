@@ -28,6 +28,22 @@ from app.srt_utils import write_srt_file
 from app.localization import LANGUAGE_CODES, LANGUAGE_LABELS, TRANSLATIONS
 
 
+# 本项目使用 CUDA 12 的 faster-whisper 运行库。只检查目录中存在任意 DLL
+# 会让 ctypes 在加载模型时才失败，因此在启动 ASR 前明确检查这些关键文件。
+REQUIRED_CUDA_DLLS = (
+    "cublas64_12.dll",
+    "cublasLt64_12.dll",
+    "cudnn_ops_infer64_8.dll",
+    "zlibwapi.dll",
+)
+REQUIRED_MODEL_FILES = (
+    "config.json",
+    "model.bin",
+    "tokenizer.json",
+    "vocabulary.json",
+)
+
+
 # ============================================================================
 # 任务参数快照
 # ============================================================================
@@ -957,6 +973,18 @@ class App:
             errors.append(self._tr("model_required"))
         elif not Path(model_dir).is_dir():
             errors.append(self._tr("model_missing", path=model_dir))
+        else:
+            missing_model_files = self._missing_files(
+                model_dir, REQUIRED_MODEL_FILES
+            )
+            if missing_model_files:
+                errors.append(
+                    self._tr(
+                        "model_files_missing",
+                        path=model_dir,
+                        files=", ".join(missing_model_files),
+                    )
+                )
 
         subtitle_path = self.subtitle_entry.get() or self.vad_srt_path
         if not subtitle_path:
@@ -978,12 +1006,21 @@ class App:
                         )
                     )
 
-        # cuDNN 目录已填写但不可用 → 警告（运行时会回退到 CPU）
+        # cuDNN 目录已填写但缺少关键 DLL → 警告（运行时会回退到 CPU）。
+        # 不填写目录仍表示用户主动选择 CPU，因此不提示运行库错误。
         cudnn_dir = self.cudnn_entry.get()
-        if cudnn_dir and not self._cudnn_is_usable(cudnn_dir):
-            warnings.append(
-                self._tr("cudnn_warning", path=cudnn_dir)
+        if cudnn_dir:
+            missing_cuda_dlls = self._missing_files(
+                cudnn_dir, REQUIRED_CUDA_DLLS
             )
+            if missing_cuda_dlls:
+                warnings.append(
+                    self._tr(
+                        "cudnn_warning",
+                        path=cudnn_dir,
+                        files=", ".join(missing_cuda_dlls),
+                    )
+                )
 
         return errors, warnings
 
@@ -1008,12 +1045,19 @@ class App:
             messagebox.showwarning(self._tr("notice"), "\n".join(warnings))
         return True
 
+    @staticmethod
+    def _missing_files(directory: str, required_files: tuple[str, ...]) -> list[str]:
+        """Return required filenames that are absent from *directory*."""
+        directory_path = Path(directory)
+        return [
+            filename
+            for filename in required_files
+            if not (directory_path / filename).is_file()
+        ]
+
     def _cudnn_is_usable(self, cudnn_dir: str) -> bool:
-        """cuDNN 目录是否存在且包含可加载的 DLL 文件。"""
-        if not cudnn_dir:
-            return False
-        cudnn_p = Path(cudnn_dir)
-        return cudnn_p.is_dir() and any(cudnn_p.glob("*.dll"))
+        """cuDNN 目录是否包含本项目需要的 CUDA 12 DLL 文件。"""
+        return not self._missing_files(cudnn_dir, REQUIRED_CUDA_DLLS)
 
     # ==================================================================
     # 线程管理
