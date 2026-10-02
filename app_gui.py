@@ -42,7 +42,7 @@ class TaskSettings:
 
     # ---- 路径 ----
     audio_path: str
-    model_path: str
+    model_dir: str
     subtitle_path: Optional[str]  # 手动运行 ASR 时的字幕来源
     cudnn_dir: str
 
@@ -91,7 +91,7 @@ class ConfigManager:
 
     DEFAULTS = {
         "PATHS": {
-            "model_path": "",
+            "model_dir": "",
             "audio_path": "",
             "subtitle_path": "",
             "cudnn_dir": "",
@@ -318,7 +318,7 @@ class App:
 
         # 模型缓存 — 在多次 ASR 运行之间将模型保留在内存中
         self._model = None          # WhisperSubtitle 实例或 None
-        self._model_key = None      # tuple(model_path, device, compute_type)
+        self._model_key = None      # tuple(model_dir, device, compute_type)
 
         # ---- 构建界面，然后从配置填充 ----
         self._build_ui()
@@ -515,7 +515,7 @@ class App:
         )
         advanced_frame.pack(side=tk.RIGHT, fill=tk.X, padx=(5, 0))
 
-        adv_labels = [("model_path", "模型路径："), ("cudnn_dir", "cuDNN 目录：")]
+        adv_labels = [("model_dir", "模型目录："), ("cudnn_dir", "cuDNN 目录：")]
         adv_modes = ["folder", "folder"]
         adv_entries: list[DragDropEntry] = []
 
@@ -731,7 +731,7 @@ class App:
         self._apply_language(gui_language, persist=False)
 
         # 路径
-        self.model_entry.set(self.config.get("PATHS", "model_path"))
+        self.model_entry.set(self.config.get("PATHS", "model_dir"))
         self.audio_entry.set(self.config.get("PATHS", "audio_path"))
         self.subtitle_entry.set(self.config.get("PATHS", "subtitle_path"))
         self.cudnn_entry.set(self.config.get("PATHS", "cudnn_dir"))
@@ -759,7 +759,7 @@ class App:
     def _save_ui_to_config(self):
         """将界面上的所有值写入配置对象（不涉及文件 I/O）。"""
         # 路径
-        self.config.set("PATHS", "model_path", self.model_entry.get())
+        self.config.set("PATHS", "model_dir", self.model_entry.get())
         self.config.set("PATHS", "audio_path", self.audio_entry.get())
         self.config.set("PATHS", "subtitle_path", self.subtitle_entry.get())
         self.config.set("PATHS", "cudnn_dir", self.cudnn_entry.get())
@@ -952,11 +952,11 @@ class App:
         """ASR 之前需要进行的检查。返回 (errors, warnings)。"""
         errors, warnings = self._validate_common()
 
-        model_path = self.model_entry.get()
-        if not model_path:
+        model_dir = self.model_entry.get()
+        if not model_dir:
             errors.append(self._tr("model_required"))
-        elif not Path(model_path).is_dir():
-            errors.append(self._tr("model_missing", path=model_path))
+        elif not Path(model_dir).is_dir():
+            errors.append(self._tr("model_missing", path=model_dir))
 
         subtitle_path = self.subtitle_entry.get() or self.vad_srt_path
         if not subtitle_path:
@@ -1088,7 +1088,7 @@ class App:
     def _collect_settings(self) -> TaskSettings:
         """主线程：将界面字段冻结为不可变快照，供后台线程使用。"""
         audio_path = self.audio_entry.get()
-        model_path = self.model_entry.get()
+        model_dir = self.model_entry.get()
         subtitle_path = self.subtitle_entry.get() or self.vad_srt_path
         cudnn_dir = self.cudnn_entry.get()
 
@@ -1103,7 +1103,7 @@ class App:
 
         return TaskSettings(
             audio_path=audio_path,
-            model_path=model_path,
+            model_dir=model_dir,
             subtitle_path=subtitle_path,
             cudnn_dir=cudnn_dir,
             device=device,
@@ -1146,11 +1146,11 @@ class App:
     def _run_all(self):
         errors, warnings = self._validate_common()
         vad_errors, vad_warnings = self._validate_vad_params()
-        model_path = self.model_entry.get()
-        if not model_path:
+        model_dir = self.model_entry.get()
+        if not model_dir:
             errors.append(self._tr("model_required"))
-        elif not Path(model_path).is_dir():
-            errors.append(self._tr("model_missing", path=model_path))
+        elif not Path(model_dir).is_dir():
+            errors.append(self._tr("model_missing", path=model_dir))
         if not self._report_validation(errors + vad_errors, warnings + vad_warnings):
             return
         # 校验通过后才保存配置，避免无效输入被写入 gui_config.ini
@@ -1256,11 +1256,11 @@ class App:
     # 模型缓存
     # ==================================================================
 
-    def _get_or_load_model(self, model_path: str, device: str, compute_type: str,
+    def _get_or_load_model(self, model_dir: str, device: str, compute_type: str,
                            cudnn_dir: str, gui_language: str):
-        """返回缓存的 WhisperSubtitle 模型；若模型路径/设备/计算类型
+        """返回缓存的 WhisperSubtitle 模型；若模型目录/设备/计算类型
         与上次加载不同，则重新加载新模型。"""
-        key = (model_path, device, compute_type)
+        key = (model_dir, device, compute_type)
         if self._model is not None and self._model_key == key:
             self._log(self._translate(gui_language, "model_reuse"))
             return self._model
@@ -1274,7 +1274,7 @@ class App:
             load_cudnn(cudnn_dir=cudnn_dir)
 
         self._model = WhisperSubtitle(
-            model_path,
+            model_dir,
             device=device,
             compute_type=compute_type,
             local_files_only=True,
@@ -1295,13 +1295,13 @@ class App:
         # 一键运行会显式传入 VAD 生成的字幕路径，避免界面异步更新竞态
         subtitle_path = subtitle_path or settings.subtitle_path
         audio_path = settings.audio_path
-        model_path = settings.model_path
+        model_dir = settings.model_dir
         asr_srt_path = settings.asr_srt_path(subtitle_path)
         tmp_srt_path = asr_srt_path + ".tmp"
 
         self._log("=" * 50)
         self._log(self._translate(settings.gui_language, "asr_start"))
-        self._log(self._translate(settings.gui_language, "asr_model", path=model_path))
+        self._log(self._translate(settings.gui_language, "asr_model", path=model_dir))
         self._log(self._translate(settings.gui_language, "asr_audio", path=audio_path))
         self._log(self._translate(settings.gui_language, "asr_chunks", path=subtitle_path))
         self._log(self._translate(
@@ -1318,7 +1318,7 @@ class App:
 
         self._log(self._translate(settings.gui_language, "model_loading"))
         model = self._get_or_load_model(
-            model_path,
+            model_dir,
             settings.device,
             settings.compute_type,
             settings.cudnn_dir,
