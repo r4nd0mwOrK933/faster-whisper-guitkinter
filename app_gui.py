@@ -571,7 +571,12 @@ class App:
         self.gui_language_var = tk.StringVar(value=LANGUAGE_LABELS["zh"])
         self.gui_language_label = self._register_text_widget(
             "gui_language",
-            ttk.Label(advanced_frame, text=self._tr("gui_language"), anchor=tk.E),
+            ttk.Label(
+                advanced_frame,
+                text=self._tr("gui_language"),
+                width=14,
+                anchor=tk.E,
+            ),
         )
         self.gui_language_label.grid(row=2, column=0, sticky=tk.W, pady=3)
         self.gui_language_combo = ttk.Combobox(
