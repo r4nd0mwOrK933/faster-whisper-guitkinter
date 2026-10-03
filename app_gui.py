@@ -24,7 +24,7 @@ except ImportError:
     HAS_DND = False
 
 from app.subtitle_transcribe import TaskCancelledError, WhisperSubtitle, load_cudnn
-from app.srt_utils import write_srt_file
+from app.srt_utils import write_subtitle_file
 from app.localization import LANGUAGE_CODES, LANGUAGE_LABELS, TRANSLATIONS
 
 
@@ -74,6 +74,10 @@ class TaskSettings:
     merge_silence_ms: int
     extend_speech_ms: int
 
+    # ---- 字幕输出 ----
+    vad_format: str
+    asr_format: str
+
     # ---- ASR ----
     language: Optional[str]  # None 表示自动检测
     initial_prompt: Optional[str]
@@ -88,15 +92,15 @@ class TaskSettings:
     # ---- 派生路径 ----
     @property
     def vad_srt_path(self) -> str:
-        """VAD 输出 SRT（音频同目录，{stem}_vad.srt）。"""
+        """VAD 输出字幕（音频同目录，{stem}_vad.<format>）。"""
         audio_p = Path(self.audio_path)
-        return str(audio_p.parent / f"{audio_p.stem}_vad.srt")
+        return str(audio_p.parent / f"{audio_p.stem}_vad.{self.vad_format}")
 
     def asr_srt_path(self, subtitle_path: Optional[str] = None) -> str:
-        """ASR 输出 SRT（使用字幕文件名基础，保存到音频所在目录）。"""
+        """ASR 输出字幕（使用字幕文件名基础，保存到音频所在目录）。"""
         audio_p = Path(self.audio_path)
         subtitle_p = Path(subtitle_path or self.subtitle_path or audio_p.stem)
-        return str(audio_p.parent / f"{subtitle_p.stem}_asr.srt")
+        return str(audio_p.parent / f"{subtitle_p.stem}_asr.{self.asr_format}")
 
 
 # ============================================================================
@@ -126,6 +130,7 @@ class ConfigManager:
             "word_timestamps": "false",
             "allow_subtitle_mismatch": "false",
             "overwrite_if_exists": "false",
+            "output_format": "srt",
         },
         "VAD": {
             "start_threshold": "0.6",
@@ -134,6 +139,7 @@ class ConfigManager:
             "max_speech_ms": "30000",
             "merge_silence_ms": "350",
             "extend_speech_ms": "50",
+            "output_format": "srt",
         },
     }
 
@@ -468,6 +474,28 @@ class App:
         )
         self.overwrite_if_exists_check.pack(side=tk.LEFT, padx=(12, 0))
 
+        self._register_text_widget(
+            "vad_output_format",
+            ttk.Label(options_frame, text=self._tr("vad_output_format")),
+        ).pack(side=tk.LEFT, padx=(14, 2))
+        self.vad_format_var = tk.StringVar(value="srt")
+        self.vad_format_combo = ttk.Combobox(
+            options_frame, textvariable=self.vad_format_var,
+            values=("srt", "ass"), width=5, state="readonly",
+        )
+        self.vad_format_combo.pack(side=tk.LEFT)
+
+        self._register_text_widget(
+            "asr_output_format",
+            ttk.Label(options_frame, text=self._tr("asr_output_format")),
+        ).pack(side=tk.LEFT, padx=(8, 2))
+        self.asr_format_var = tk.StringVar(value="srt")
+        self.asr_format_combo = ttk.Combobox(
+            options_frame, textvariable=self.asr_format_var,
+            values=("srt", "ass"), width=5, state="readonly",
+        )
+        self.asr_format_combo.pack(side=tk.LEFT)
+
         #
         # ── 参数（VAD | Whisper）──────────────────────────────
         #
@@ -758,6 +786,10 @@ class App:
     # 配置 ↔ 界面绑定
     # ==================================================================
 
+    def _get_output_format(self, section: str, key: str) -> str:
+        value = self.config.get(section, key, "srt").lower()
+        return value if value in {"srt", "ass"} else "srt"
+
     def _load_config_to_ui(self):
         """从配置对象填充所有界面字段。"""
         self.config.load()
@@ -795,6 +827,8 @@ class App:
         self.overwrite_if_exists_var.set(
             self.config.get_bool("WHISPER", "overwrite_if_exists")
         )
+        self.vad_format_var.set(self._get_output_format("VAD", "output_format"))
+        self.asr_format_var.set(self._get_output_format("WHISPER", "output_format"))
 
     def _save_ui_to_config(self):
         """将界面上的所有值写入配置对象（不涉及文件 I/O）。"""
@@ -834,6 +868,8 @@ class App:
             "WHISPER", "overwrite_if_exists",
             str(self.overwrite_if_exists_var.get()).lower(),
         )
+        self.config.set("WHISPER", "output_format", self.asr_format_var.get())
+        self.config.set("VAD", "output_format", self.vad_format_var.get())
         self.config.set("GUI", "language", self._gui_language)
 
     def _save_config(self):
@@ -946,18 +982,21 @@ class App:
     # 校验
     # ==================================================================
 
-    @staticmethod
     def _generated_vad_asr_paths(
-        audio_path: str, subtitle_path: Optional[str] = None
+        self,
+        audio_path: str,
+        subtitle_path: Optional[str] = None,
+        vad_format: Optional[str] = None,
+        asr_format: Optional[str] = None,
     ) -> tuple[str, str] | None:
         """计算 VAD 与 ASR 的目标字幕路径，用于执行前的同名保护。"""
         if not audio_path:
             return None
 
         audio_p = Path(audio_path)
-        vad_path = audio_p.parent / f"{audio_p.stem}_vad.srt"
+        vad_path = audio_p.parent / f"{audio_p.stem}_vad.{vad_format or self.vad_format_var.get()}"
         subtitle_p = Path(subtitle_path or audio_p.stem)
-        asr_path = audio_p.parent / f"{subtitle_p.stem}_asr.srt"
+        asr_path = audio_p.parent / f"{subtitle_p.stem}_asr.{asr_format or self.asr_format_var.get()}"
         return str(vad_path), str(asr_path)
 
     @staticmethod
@@ -1232,6 +1271,8 @@ class App:
             max_speech_ms=int(self.max_speech_var.get()),
             merge_silence_ms=int(self.merge_silence_var.get()),
             extend_speech_ms=int(self.extend_speech_var.get()),
+            vad_format=self.vad_format_var.get(),
+            asr_format=self.asr_format_var.get(),
             language=language,
             initial_prompt=self.initial_prompt_var.get().strip() or None,
             hotwords=self.hotwords_var.get().strip() or None,
@@ -1281,7 +1322,7 @@ class App:
         # 一键运行的 ASR 输入是本次 VAD 生成的字幕，因此按该路径计算冲突。
         audio_path = self.audio_entry.get()
         predicted_vad_path = (
-            str(Path(audio_path).parent / f"{Path(audio_path).stem}_vad.srt")
+            str(Path(audio_path).parent / f"{Path(audio_path).stem}_vad.{self.vad_format_var.get()}")
             if audio_path else None
         )
         if not self._check_same_vad_asr_filename(predicted_vad_path):
@@ -1296,9 +1337,9 @@ class App:
     # ==================================================================
 
     def _vad_thread(self, settings: TaskSettings, notify: bool = True) -> Optional[str]:
-        """运行 FireRedVAD 并生成 _vad.srt 文件。
+        """运行 FireRedVAD 并生成选定格式的字幕文件。
 
-        返回生成的 SRT 路径；失败或被取消时返回 None。
+        返回生成的字幕路径；失败或被取消时返回 None。
         """
         from app.FireRedVAD.main import vad_detect
 
@@ -1306,14 +1347,17 @@ class App:
             self._log(self._translate(settings.gui_language, "vad_cancelled"))
             return None
 
-        vad_srt_path = settings.vad_srt_path
-        tmp_srt_path = vad_srt_path + ".tmp"
+        vad_output_path = settings.vad_srt_path
+        tmp_output_path = vad_output_path + ".tmp"
 
         if not settings.overwrite_if_exists:
             # 一键运行的后续 ASR 使用本次 VAD 输出，而不是界面中的旧字幕路径。
             asr_input_path = settings.vad_srt_path if not notify else settings.subtitle_path
             output_paths = self._generated_vad_asr_paths(
-                settings.audio_path, asr_input_path
+                settings.audio_path,
+                asr_input_path,
+                vad_format=settings.vad_format,
+                asr_format=settings.asr_format,
             )
             if output_paths and self._same_filename(*output_paths):
                 warning = self._translate(
@@ -1343,14 +1387,14 @@ class App:
         self._log(self._translate(
             settings.gui_language,
             "vad_output",
-            path=vad_srt_path,
+            path=vad_output_path,
         ))
 
         result = vad_detect(
             wav_path=settings.audio_path,
             model_path=model_onnx,
             cmvn_path=cmvn_ark,
-            output_srt=tmp_srt_path,
+            output_srt=tmp_output_path,
             start_threshold=settings.start_threshold,
             end_threshold=settings.end_threshold,
             min_speech_ms=settings.min_speech_ms,
@@ -1363,19 +1407,19 @@ class App:
         dur = result.get("dur", 0.0)
 
         # 输出原子化：先写临时文件，成功后替换正式文件
-        if not os.path.isfile(tmp_srt_path):
+        if not os.path.isfile(tmp_output_path):
             self._log(self._translate(
                 settings.gui_language,
                 "vad_no_output",
-                path=vad_srt_path,
+                path=vad_output_path,
             ))
             return None
-        os.replace(tmp_srt_path, vad_srt_path)
+        os.replace(tmp_output_path, vad_output_path)
 
-        self.vad_srt_path = vad_srt_path
+        self.vad_srt_path = vad_output_path
 
         # 更新界面输入框并持久化配置（主线程回调，避免后台访问 Tk）
-        self._post(lambda: self._persist_subtitle_path(vad_srt_path))
+        self._post(lambda: self._persist_subtitle_path(vad_output_path))
 
         self._log(self._translate(
             settings.gui_language,
@@ -1386,7 +1430,7 @@ class App:
         self._log(self._translate(
             settings.gui_language,
             "srt_saved",
-            path=vad_srt_path,
+            path=vad_output_path,
         ))
         self._log("─" * 50)
         if notify:
@@ -1397,13 +1441,13 @@ class App:
                 "vad_complete_message",
                 count=len(timestamps),
                 duration=dur,
-                path=vad_srt_path,
+                path=vad_output_path,
             )
             self._post(lambda: messagebox.showinfo(
                 complete_title,
                 complete_message,
             ))
-        return vad_srt_path
+        return vad_output_path
 
     # ==================================================================
     # 模型缓存
@@ -1531,7 +1575,7 @@ class App:
         texts = [s.text if hasattr(s, "text") else "" for s in segment_list]
 
         # 输出原子化：先写临时文件，成功后替换正式文件
-        write_srt_file(path=tmp_srt_path, timestamps=timestamps, texts=texts)
+        write_subtitle_file(path=tmp_srt_path, timestamps=timestamps, texts=texts)
         os.replace(tmp_srt_path, asr_srt_path)
 
         self._log(self._translate(

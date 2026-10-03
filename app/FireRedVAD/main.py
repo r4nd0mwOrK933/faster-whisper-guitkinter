@@ -23,7 +23,7 @@ from enum import Enum
 import numpy as np
 import onnxruntime as ort
 
-from app.srt_utils import write_srt_file
+from app.srt_utils import write_subtitle_file
 
 # # 项目根目录 = 当前文件所在目录的父目录
 # PROJ_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -963,7 +963,7 @@ def vad_detect(
             else:
                 base, _ = os.path.splitext(wav_path)
                 output_srt = base + ".srt"
-        write_srt_file(
+        write_subtitle_file(
             path=output_srt, 
             timestamps=result["timestamps"], 
             wav_dur=result.get("dur")
