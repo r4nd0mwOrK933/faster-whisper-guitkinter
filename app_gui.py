@@ -1077,15 +1077,19 @@ class App:
 
         return errors, warnings
 
-    def _validate_asr(self) -> tuple[list[str], list[str]]:
-        """ASR 之前需要进行的检查。返回 (errors, warnings)。"""
-        errors, warnings = self._validate_common()
+    def _validate_model_and_runtime(self) -> tuple[list[str], list[str]]:
+        """检查 ASR 所需的模型权重和 CUDA/cuDNN 运行库。"""
+        errors: list[str] = []
+        warnings: list[str] = []
 
         model_dir = self.model_entry.get()
-        if not model_dir:
-            errors.append(self._tr("model_required"))
-        elif not Path(model_dir).is_dir():
-            errors.append(self._tr("model_missing", path=model_dir))
+        if not model_dir or not Path(model_dir).is_dir():
+            errors.append(
+                self._tr(
+                    "model_missing",
+                    path=model_dir or self._tr("path_not_set"),
+                )
+            )
         else:
             missing_model_files = self._missing_files(
                 model_dir, REQUIRED_MODEL_FILES
@@ -1098,6 +1102,31 @@ class App:
                         files=", ".join(missing_model_files),
                     )
                 )
+
+        # 运行库缺失时仍允许回退到 CPU，但要尽早告知用户如何下载。
+        cudnn_dir = self.cudnn_entry.get()
+        missing_cuda_dlls = (
+            list(REQUIRED_CUDA_DLLS)
+            if not cudnn_dir
+            else self._missing_files(cudnn_dir, REQUIRED_CUDA_DLLS)
+        )
+        if missing_cuda_dlls:
+            warnings.append(
+                self._tr(
+                    "cudnn_warning",
+                    path=cudnn_dir or self._tr("path_not_set"),
+                    files=", ".join(missing_cuda_dlls),
+                )
+            )
+
+        return errors, warnings
+
+    def _validate_asr(self) -> tuple[list[str], list[str]]:
+        """ASR 之前需要进行的检查。返回 (errors, warnings)。"""
+        errors, warnings = self._validate_common()
+        dependency_errors, dependency_warnings = self._validate_model_and_runtime()
+        errors.extend(dependency_errors)
+        warnings.extend(dependency_warnings)
 
         subtitle_path = self.subtitle_entry.get() or self.vad_srt_path
         if not subtitle_path:
@@ -1118,22 +1147,6 @@ class App:
                             audio=audio_stem,
                         )
                     )
-
-        # cuDNN 目录已填写但缺少关键 DLL → 警告（运行时会回退到 CPU）。
-        # 不填写目录仍表示用户主动选择 CPU，因此不提示运行库错误。
-        cudnn_dir = self.cudnn_entry.get()
-        if cudnn_dir:
-            missing_cuda_dlls = self._missing_files(
-                cudnn_dir, REQUIRED_CUDA_DLLS
-            )
-            if missing_cuda_dlls:
-                warnings.append(
-                    self._tr(
-                        "cudnn_warning",
-                        path=cudnn_dir,
-                        files=", ".join(missing_cuda_dlls),
-                    )
-                )
 
         return errors, warnings
 
@@ -1312,11 +1325,9 @@ class App:
     def _run_all(self):
         errors, warnings = self._validate_common()
         vad_errors, vad_warnings = self._validate_vad_params()
-        model_dir = self.model_entry.get()
-        if not model_dir:
-            errors.append(self._tr("model_required"))
-        elif not Path(model_dir).is_dir():
-            errors.append(self._tr("model_missing", path=model_dir))
+        dependency_errors, dependency_warnings = self._validate_model_and_runtime()
+        errors.extend(dependency_errors)
+        warnings.extend(dependency_warnings)
         if not self._report_validation(errors + vad_errors, warnings + vad_warnings):
             return
         # 一键运行的 ASR 输入是本次 VAD 生成的字幕，因此按该路径计算冲突。
