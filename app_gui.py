@@ -83,6 +83,7 @@ class TaskSettings:
     word_timestamps: bool
     log_progress: bool
     gui_language: str
+    overwrite_if_exists: bool = False
 
     # ---- 派生路径 ----
     @property
@@ -124,6 +125,7 @@ class ConfigManager:
             "best_of": "3",
             "word_timestamps": "false",
             "allow_subtitle_mismatch": "false",
+            "overwrite_if_exists": "false",
         },
         "VAD": {
             "start_threshold": "0.6",
@@ -438,19 +440,33 @@ class App:
         self.audio_entry = entries[0]
         self.subtitle_entry = entries[1]
 
+        # 两个选项放在同一个横向容器中，紧挨显示，避免被 grid 的可伸缩列拉开。
+        options_frame = ttk.Frame(input_frame)
+        options_frame.grid(row=2, column=1, sticky=tk.W, pady=3)
+
         # 允许字幕与音频文件名不同（取消勾选时会做文件名匹配检查）
         self.allow_subtitle_mismatch_var = tk.BooleanVar()
         self.allow_subtitle_mismatch_check = self._register_text_widget(
             "allow_subtitle_mismatch",
             ttk.Checkbutton(
-                input_frame,
+                options_frame,
                 text=self._tr("allow_subtitle_mismatch"),
                 variable=self.allow_subtitle_mismatch_var,
             ),
         )
-        self.allow_subtitle_mismatch_check.grid(
-            row=2, column=1, sticky=tk.W, pady=3
+        self.allow_subtitle_mismatch_check.pack(side=tk.LEFT)
+
+        # VAD 和 ASR 生成同名字幕时，允许继续并由后续输出覆盖文件
+        self.overwrite_if_exists_var = tk.BooleanVar()
+        self.overwrite_if_exists_check = self._register_text_widget(
+            "overwrite_if_exists",
+            ttk.Checkbutton(
+                options_frame,
+                text=self._tr("overwrite_if_exists"),
+                variable=self.overwrite_if_exists_var,
+            ),
         )
+        self.overwrite_if_exists_check.pack(side=tk.LEFT, padx=(12, 0))
 
         #
         # ── 参数（VAD | Whisper）──────────────────────────────
@@ -771,6 +787,9 @@ class App:
         self.allow_subtitle_mismatch_var.set(
             self.config.get_bool("WHISPER", "allow_subtitle_mismatch")
         )
+        self.overwrite_if_exists_var.set(
+            self.config.get_bool("WHISPER", "overwrite_if_exists")
+        )
 
     def _save_ui_to_config(self):
         """将界面上的所有值写入配置对象（不涉及文件 I/O）。"""
@@ -805,6 +824,10 @@ class App:
         self.config.set(
             "WHISPER", "allow_subtitle_mismatch",
             str(self.allow_subtitle_mismatch_var.get()).lower(),
+        )
+        self.config.set(
+            "WHISPER", "overwrite_if_exists",
+            str(self.overwrite_if_exists_var.get()).lower(),
         )
         self.config.set("GUI", "language", self._gui_language)
 
@@ -917,6 +940,52 @@ class App:
     # ==================================================================
     # 校验
     # ==================================================================
+
+    @staticmethod
+    def _generated_vad_asr_paths(
+        audio_path: str, subtitle_path: Optional[str] = None
+    ) -> tuple[str, str] | None:
+        """计算 VAD 与 ASR 的目标字幕路径，用于执行前的同名保护。"""
+        if not audio_path:
+            return None
+
+        audio_p = Path(audio_path)
+        vad_path = audio_p.parent / f"{audio_p.stem}_vad.srt"
+        subtitle_p = Path(subtitle_path or audio_p.stem)
+        asr_path = audio_p.parent / f"{subtitle_p.stem}_asr.srt"
+        return str(vad_path), str(asr_path)
+
+    @staticmethod
+    def _same_filename(vad_path: str, asr_path: str) -> bool:
+        """按 Windows 文件名规则判断两个输出文件名是否相同。"""
+        return Path(vad_path).name.casefold() == Path(asr_path).name.casefold()
+
+    def _check_same_vad_asr_filename(
+        self, subtitle_path: Optional[str] = None
+    ) -> bool:
+        """阻止 VAD/ASR 生成同名字幕，除非用户明确允许强制覆盖。"""
+        if self.overwrite_if_exists_var.get():
+            return True
+
+        paths = self._generated_vad_asr_paths(
+            self.audio_entry.get(),
+            subtitle_path or self.subtitle_entry.get() or self.vad_srt_path,
+        )
+        if paths is None:
+            return True
+
+        vad_path, asr_path = paths
+        if not self._same_filename(vad_path, asr_path):
+            return True
+
+        warning = self._tr(
+            "same_vad_asr_filename_warning",
+            vad_path=vad_path,
+            asr_path=asr_path,
+        )
+        self._log(f"⚠️ {warning}")
+        messagebox.showwarning(self._tr("notice"), warning)
+        return False
 
     def _validate_common(self) -> tuple[list[str], list[str]]:
         """VAD 和 ASR 之前都需要进行的检查。
@@ -1166,12 +1235,17 @@ class App:
             word_timestamps=bool(self.word_timestamps_var.get()),
             log_progress=bool(self.log_progress_var.get()),
             gui_language=self._gui_language,
+            overwrite_if_exists=bool(
+                self.overwrite_if_exists_var.get()
+            ),
         )
 
     def _run_vad(self):
         errors, warnings = self._validate_common()
         vad_errors, vad_warnings = self._validate_vad_params()
         if not self._report_validation(errors + vad_errors, warnings + vad_warnings):
+            return
+        if not self._check_same_vad_asr_filename():
             return
         # 校验通过后才保存配置，避免无效输入被写入 gui_config.ini
         self._save_ui_to_config()
@@ -1181,6 +1255,8 @@ class App:
     def _run_asr(self):
         errors, warnings = self._validate_asr()
         if not self._report_validation(errors, warnings):
+            return
+        if not self._check_same_vad_asr_filename():
             return
         # 校验通过后才保存配置，避免无效输入被写入 gui_config.ini
         self._save_ui_to_config()
@@ -1196,6 +1272,14 @@ class App:
         elif not Path(model_dir).is_dir():
             errors.append(self._tr("model_missing", path=model_dir))
         if not self._report_validation(errors + vad_errors, warnings + vad_warnings):
+            return
+        # 一键运行的 ASR 输入是本次 VAD 生成的字幕，因此按该路径计算冲突。
+        audio_path = self.audio_entry.get()
+        predicted_vad_path = (
+            str(Path(audio_path).parent / f"{Path(audio_path).stem}_vad.srt")
+            if audio_path else None
+        )
+        if not self._check_same_vad_asr_filename(predicted_vad_path):
             return
         # 校验通过后才保存配置，避免无效输入被写入 gui_config.ini
         self._save_ui_to_config()
@@ -1219,6 +1303,26 @@ class App:
 
         vad_srt_path = settings.vad_srt_path
         tmp_srt_path = vad_srt_path + ".tmp"
+
+        if not settings.overwrite_if_exists:
+            # 一键运行的后续 ASR 使用本次 VAD 输出，而不是界面中的旧字幕路径。
+            asr_input_path = settings.vad_srt_path if not notify else settings.subtitle_path
+            output_paths = self._generated_vad_asr_paths(
+                settings.audio_path, asr_input_path
+            )
+            if output_paths and self._same_filename(*output_paths):
+                warning = self._translate(
+                    settings.gui_language,
+                    "same_vad_asr_filename_warning",
+                    vad_path=output_paths[0],
+                    asr_path=output_paths[1],
+                )
+                self._log(f"⚠️ {warning}")
+                self._post(lambda: messagebox.showwarning(
+                    self._translate(settings.gui_language, "notice"),
+                    warning,
+                ))
+                return None
 
         fireredvad_dir = Path(__file__).resolve().parent / "app" / "FireRedVAD"
         model_onnx = str(fireredvad_dir / "fireredvad_vad.onnx")
@@ -1342,6 +1446,22 @@ class App:
         model_dir = settings.model_dir
         asr_srt_path = settings.asr_srt_path(subtitle_path)
         tmp_srt_path = asr_srt_path + ".tmp"
+
+        if not settings.overwrite_if_exists and self._same_filename(
+            settings.vad_srt_path, asr_srt_path
+        ):
+            warning = self._translate(
+                settings.gui_language,
+                "same_vad_asr_filename_warning",
+                vad_path=settings.vad_srt_path,
+                asr_path=asr_srt_path,
+            )
+            self._log(f"⚠️ {warning}")
+            self._post(lambda: messagebox.showwarning(
+                self._translate(settings.gui_language, "notice"),
+                warning,
+            ))
+            return
 
         self._log("=" * 50)
         self._log(self._translate(settings.gui_language, "asr_start"))
