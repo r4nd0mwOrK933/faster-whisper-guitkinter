@@ -28,14 +28,6 @@ from app.srt_utils import write_subtitle_file
 from app.localization import LANGUAGE_CODES, LANGUAGE_LABELS, TRANSLATIONS
 
 
-# 本项目使用 CUDA 12 的 faster-whisper 运行库。只检查目录中存在任意 DLL
-# 会让 ctypes 在加载模型时才失败，因此在启动 ASR 前明确检查这些关键文件。
-REQUIRED_CUDA_DLLS = (
-    "cublas64_12.dll",
-    "cublasLt64_12.dll",
-    "cudnn_ops_infer64_8.dll",
-    "zlibwapi.dll",
-)
 REQUIRED_MODEL_FILES = (
     "config.json",
     "model.bin",
@@ -312,6 +304,7 @@ class DragDropEntry(ttk.Frame):
 # ============================================================================
 # 主应用程序
 # ============================================================================
+
 
 class App:
     """Faster-Whisper VAD → ASR 流水线主图形界面。"""
@@ -1103,21 +1096,9 @@ class App:
                     )
                 )
 
-        # 运行库缺失时仍允许回退到 CPU，但要尽早告知用户如何下载。
-        cudnn_dir = self.cudnn_entry.get()
-        missing_cuda_dlls = (
-            list(REQUIRED_CUDA_DLLS)
-            if not cudnn_dir
-            else self._missing_files(cudnn_dir, REQUIRED_CUDA_DLLS)
-        )
-        if missing_cuda_dlls:
-            warnings.append(
-                self._tr(
-                    "cudnn_warning",
-                    path=cudnn_dir or self._tr("path_not_set"),
-                    files=", ".join(missing_cuda_dlls),
-                )
-            )
+        if not self.cudnn_entry.get():
+            warnings.append(self._tr("cudnn_empty_warning"))
+            self._log(self._tr("runtime_download_log"))
 
         return errors, warnings
 
@@ -1150,14 +1131,11 @@ class App:
 
         return errors, warnings
 
-    def _report_validation(self, errors, warnings) -> bool:
+    def _report_validation(self, errors, warnings, confirm_empty_runtime=False) -> bool:
         """汇总校验结果并弹窗提示。
 
         errors    → 逐条写日志 + 错误弹窗，阻断运行
         warnings  → 逐条写日志 + 警告弹窗，不阻断运行
-
-        Returns:
-            True 表示无错误、可以运行；False 表示存在错误、应阻断。
         """
         for e in errors:
             self._log(f"❌ {e}")
@@ -1167,6 +1145,14 @@ class App:
         if errors:
             messagebox.showerror(self._tr("validation_error"), "\n".join(errors))
             return False
+
+        runtime_warning = self._tr("cudnn_empty_warning")
+        if confirm_empty_runtime and runtime_warning in warnings:
+            if not messagebox.askyesno(self._tr("notice"), runtime_warning):
+                self._log(self._tr("runtime_cancelled"))
+                return False
+            warnings = [warning for warning in warnings if warning != runtime_warning]
+
         if warnings:
             messagebox.showwarning(self._tr("notice"), "\n".join(warnings))
         return True
@@ -1180,10 +1166,6 @@ class App:
             for filename in required_files
             if not (directory_path / filename).is_file()
         ]
-
-    def _cudnn_is_usable(self, cudnn_dir: str) -> bool:
-        """cuDNN 目录是否包含本项目需要的 CUDA 12 DLL 文件。"""
-        return not self._missing_files(cudnn_dir, REQUIRED_CUDA_DLLS)
 
     # ==================================================================
     # 线程管理
@@ -1262,10 +1244,9 @@ class App:
         subtitle_path = self.subtitle_entry.get() or self.vad_srt_path
         cudnn_dir = self.cudnn_entry.get()
 
-        # cuDNN 目录不可用时回退到 CPU（校验阶段已弹窗提示）
-        device = "cuda" if self._cudnn_is_usable(cudnn_dir) else "cpu"
+        # 不预判目录中的 DLL，由模型加载阶段验证实际运行库依赖。
+        device = "cuda" if cudnn_dir else "cpu"
         compute_type = "int8_float16" if device == "cuda" else "int8"
-        cudnn_dir = cudnn_dir if device == "cuda" else ""
 
         language = self.language_var.get().strip()
         if language.lower() in ("auto", ""):
@@ -1313,7 +1294,7 @@ class App:
 
     def _run_asr(self):
         errors, warnings = self._validate_asr()
-        if not self._report_validation(errors, warnings):
+        if not self._report_validation(errors, warnings, confirm_empty_runtime=True):
             return
         if not self._check_same_vad_asr_filename():
             return
@@ -1328,7 +1309,11 @@ class App:
         dependency_errors, dependency_warnings = self._validate_model_and_runtime()
         errors.extend(dependency_errors)
         warnings.extend(dependency_warnings)
-        if not self._report_validation(errors + vad_errors, warnings + vad_warnings):
+        if not self._report_validation(
+            errors + vad_errors,
+            warnings + vad_warnings,
+            confirm_empty_runtime=True,
+        ):
             return
         # 一键运行的 ASR 输入是本次 VAD 生成的字幕，因此按该路径计算冲突。
         audio_path = self.audio_entry.get()
